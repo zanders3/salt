@@ -12,7 +12,7 @@ void error(const char* fmt, ...);
 extern "C" { size_t strlen(const char* str); }
 extern "C" { int strcmp(const char* str1, const char* str2); }
 typedef long long s64; typedef unsigned long long u64;
-typedef int s32; typedef unsigned int u32; 
+typedef unsigned char u8; typedef char s8; typedef int s32; typedef unsigned int u32;
 typedef float f32;
 u64 str_hash(const char* str, size_t len) {
 	u64 x = 0xcbf29ce484222325ull;
@@ -70,18 +70,20 @@ template <typename T> struct Vector {
 	T* begin() { return items; }
 	T& back() { return items[len - 1]; }
 	T* end() { return items + len; }
+	void clear() { delete[] items; *this = {}; }
+	void grow() {
+		cap = cap * 2 < 16 ? 16 : cap * 2;
+		T* newitems = new T[cap]{};
+		if (items)
+			for (u32 i = 0; i < len; ++i)
+				newitems[i] = items[i];
+		items = newitems;
+	}
 	void push(T item) {
-		if (len >= cap) {
-			cap = cap * 2 < 16 ? 16 : cap * 2;
-			T* newitems = new T[cap]{};
-			if (items)
-				for (u32 i = 0; i < len; ++i)
-					newitems[i] = items[i];
-			items = newitems;
-		}
+		if (len >= cap) grow();
 		items[len++] = item;
 	}
-	void pop() { if (len > 0) { --len; } }
+	T pop() { if (len > 0) { --len; } return items[len]; }
 };
 template <typename T> struct Pool {
 	T* items; u32 len;
@@ -156,13 +158,9 @@ struct CondBlock { Expr* cond; Expr* block; };
 enum class ValueType { VOID, s32, f32 };
 struct Value {
 	ValueType type;
-	union {
-		int s32;
-		float f32;
-	};
+	int val;
 	Value() : type(ValueType::VOID) {}
-	Value(int val) : type(ValueType::s32), s32(val) {}
-	Value(float val) : type(ValueType::f32), f32(val) {}
+	Value(int val) : type(ValueType::s32), val(val) {}
 };
 struct Expr {
 	ExprType type;
@@ -322,8 +320,7 @@ void pushenv() { envs.push({}); }
 void popenv() { envs.back().funcs.clear(); envs.back().vars.clear(); envs.pop(); }
 
 template <typename T> T cast_val(Value v) {
-	if (v.type == ValueType::s32) return (T)v.s32;
-	if (v.type == ValueType::f32) return (T)v.f32;
+	if (v.type == ValueType::s32) return (T)v.val;
 	error("Cannot cast void value");
 	return T();
 }
@@ -358,7 +355,6 @@ Value eval_expr(Expr* e) {
 	else if (e->type == ExprType::BINARY) {
 		Value l = eval_expr(e->binary.l); Value r = eval_expr(e->binary.r);
 		if (l.type == ValueType::s32) return eval_op_int<s32>(e->binary.op, l, r);
-		if (l.type == ValueType::f32) return eval_op<f32>(e->binary.op, l, r);
 		error("Cannot apply operator to void");
 	}
 	else if (e->type == ExprType::CALL) {
@@ -458,7 +454,17 @@ void error(const char* fmt, ...) {
 }
 
 void test_expr(const char* s, int v) { print("%s\n", s); Value a = eval(s); if (!((v == 0 && a.type == ValueType::VOID) || cast_val<int>(a) == v)) __debugbreak(); }
-void test() {
+void test_vm(const char* s, int v) {
+	print("%s\n", s);
+	streambeg = stream = s; nexttoken();
+	Expr* e = parse_expr();
+	code.clear();
+	vm_compile(e);
+	vm_disasm();
+	int r = vm_exec();
+	if (v != r) __debugbreak();
+}
+void test() {	
 	test_expr("{ func fib(n) if (n > 1) n+fib(n-1) else 1; fib(3); }", 6);
 	test_expr("print(b=5,3)", 0);
 	test_expr("3+3>=6", 1);
