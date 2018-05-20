@@ -8,6 +8,8 @@
 //foo = (a,b) => { a + 3; a-3; }
 //library stuff
 void print(const char* fmt, ...);
+struct Expr;
+void error(Expr* expr, const char* fmt, ...);
 void error(const char* fmt, ...);
 extern "C" { size_t strlen(const char* str); }
 extern "C" { int strcmp(const char* str1, const char* str2); }
@@ -111,8 +113,9 @@ const char* internstr(const char* beg, const char* end) {
 const char* internstr(const char* str) { return internstr(str, str + strlen(str)); }
 
 //tokeniser
-enum class TokenType { LPR, RPR, GT, LT, EQEQ, LTEQ, GTEQ, NEQ, ADD, SUB, MUL, DIV, MOD, INT, ID, EQ, EOF, COMMA, LBR, RBR, SC, IF, ELIF, ELSE, WHILE, FUNC };
-struct Token { TokenType type; int val; const char* str; const char* stream; } token;
+enum class TokenType { LPR, RPR, GT, LT, EQEQ, LTEQ, GTEQ, NEQ, ADD, SUB, MUL, DIV, MOD, INT, ID, EQ, EOF, COMMA, LBR, RBR, SC, IF, ELIF, ELSE, WHILE, FUNC, RETURN };
+const char* token_strs[] = { "(", ")", ">", "<", "==", "<=", ">=", "!=", "+", "-", "*", "/", "%", "int", "id", "=", "<eof>", ",", "{", "}", ";", "if", "elif", "else", "while", "func", "return" };
+struct Token { TokenType type; int val; const char* str; const char* loc; } token;
 const char *streambeg, *stream;
 #define TOK(cv,t) if (c == cv) { ++stream; token.type = TokenType::t; return; }
 #define TOK2(cv,t) if (c == cv[0] && stream[1] == cv[1]) { stream += 2; token.type = TokenType::t; return; }
@@ -120,7 +123,7 @@ const char *streambeg, *stream;
 void nexttoken() {
 	token = {};
 	char c = *stream;
-	token.stream = stream;
+	token.loc = stream;
 	while (c == ' ' || c == '\t' || c == '\n') { ++stream; c = *stream; }
 	if (c >= '0' && c <= '9') {
 		int num = 0;
@@ -133,7 +136,7 @@ void nexttoken() {
 		const char* start = stream; ++stream; c = *stream;
 		while ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_') { ++stream; c = *stream; }
 		token.str = internstr(start, stream); 
-		KEYW("if", IF) KEYW("elif", ELIF) KEYW("else", ELSE) KEYW("while", WHILE) KEYW("func", FUNC)
+		KEYW("if", IF) KEYW("elif", ELIF) KEYW("else", ELSE) KEYW("while", WHILE) KEYW("func", FUNC) KEYW("return", RETURN)
 		token.type = TokenType::ID; return;
 	}
 	TOK2("==", EQEQ) TOK2("<=", LTEQ) TOK2(">=", GTEQ) TOK2("!=", NEQ)
@@ -142,8 +145,8 @@ void nexttoken() {
 	TOK('\0', EOF) TOK('=', EQ) TOK(',', COMMA) TOK('{', LBR) TOK('}', RBR) TOK(';', SC)
 	error("Unknown symbol %c", c);
 }
-void expect(TokenType type, const char* c) {
-	if (token.type != type) error("Expected %s", c);
+void expect(TokenType type) {
+	if (token.type != type) error("Unexpected %s expected %s", token_strs[(int)token.type], token_strs[(int)type]);
 	nexttoken();
 }
 bool match(TokenType type) {
@@ -152,39 +155,44 @@ bool match(TokenType type) {
 }
 
 //parser
-enum class ExprType { VAR, VAL, BINARY, CALL, FUNC, ASSIGN, BLOCK, IF, WHILE };
-struct Expr;
-struct CondBlock { Expr* cond; Expr* block; };
-enum class ValueType { VOID, s32, f32 };
+enum class ValueType { VOID, VAR, FUNC };
 struct Value {
 	ValueType type;
-	int val;
-	Value() : type(ValueType::VOID) {}
-	Value(int val) : type(ValueType::s32), val(val) {}
+	u32 val;
+	static Value VAR(u32 val) { return { ValueType::VAR, val }; }
+	static Value VOID() { return { ValueType::VOID, 0 }; }
+	static Value FUNC() { return { ValueType::FUNC, 0 }; }
 };
+enum class ExprType { VAR, VAL, BINARY, CALL, FUNC, ASSIGN, BLOCK, IF, WHILE, RETURN };
+struct CondBlock { Expr* cond; Expr* block; };
+struct Scope { Map<const char*, Value> vars; u32 vars_in_scope; };
 struct Expr {
 	ExprType type;
+	const char* loc;
 	union {
 		const char* varname;
 		Value val;
 		struct { TokenType op; Expr *l, *r; } binary;
 		struct { const char* funcname; Vector<Expr*> args; } call;
-		struct { const char* funcname; Vector<const char*> params; Expr* block; } func;
+		struct { const char* funcname; Vector<const char*> params; Expr* exprs; } func;
 		struct { const char* varname; Expr* e; } assign;
-		Vector<Expr*> block;
+		struct { Vector<Expr*> exprs; Scope scope; } block;
 		struct { Vector<CondBlock> conds; Expr* elseblock; } ifexpr;
 		CondBlock whileexpr;
+		Expr* returnexpr;
 	};
 	Expr() {}
-	Expr(Value v) : type(ExprType::VAL), val(v) {}
-	Expr(TokenType op, Expr* l, Expr* r) : type(ExprType::BINARY), binary({ op, l, r }) {}
-	Expr(const char* varname) : type(ExprType::VAR), varname(varname) {}
-	Expr(const char* funcname, Vector<Expr*>& args) : type(ExprType::CALL), call({ funcname, args }) {}
-	Expr(const char* funcname, Vector<const char*>& params, Expr* block) : type(ExprType::FUNC), func({ funcname, params, block }) {}
-	Expr(const char* varname, Expr* assign) : type(ExprType::ASSIGN), assign({varname, assign}) {}
-	Expr(Vector<Expr*>& block) : type(ExprType::BLOCK), block(block) {}
-	Expr(Vector<CondBlock>& conds, Expr* elseblock) : type(ExprType::IF), ifexpr({ conds, elseblock }) {}
-	Expr(Expr* cond, Expr* block) : type(ExprType::WHILE), whileexpr({ cond, block }) {}
+	Expr(const char* loc, Value v) : type(ExprType::VAL), loc(loc), val(v) {}
+	Expr(const char* loc, TokenType op, Expr* l, Expr* r) : type(ExprType::BINARY), loc(loc), binary({ op, l, r }) {}
+	Expr(const char* loc, const char* varname) : type(ExprType::VAR), loc(loc), varname(varname) {}
+	Expr(const char* loc, const char* funcname, Vector<Expr*>& args) : type(ExprType::CALL), loc(loc), call({ funcname, args }) {}
+	Expr(const char* loc, const char* funcname, Vector<const char*>& params, Expr* block) : type(ExprType::FUNC), loc(loc), func({ funcname, params, block }) {}
+	Expr(const char* loc, const char* varname, Expr* assign) : type(ExprType::ASSIGN), loc(loc), assign({varname, assign}) {}
+	Expr(const char* loc, Vector<Expr*>& block) : type(ExprType::BLOCK), loc(loc), block({ block, {} }) {}
+	Expr(const char* loc, Vector<CondBlock>& conds, Expr* elseblock) : type(ExprType::IF), loc(loc), ifexpr({ conds, elseblock }) {}
+	Expr(const char* loc, Expr* cond, Expr* block) : type(ExprType::WHILE), loc(loc), whileexpr({ cond, block }) {}
+	Expr(const char* loc, Expr* returnexpr) : type(ExprType::RETURN), returnexpr(returnexpr) {}
+	bool expects_sc() { return type != ExprType::IF && type != ExprType::BLOCK && type != ExprType::WHILE && type != ExprType::FUNC; }
 };
 Pool<Expr> exprs{};
 Expr* parse_expr();
@@ -192,20 +200,21 @@ Expr* parse_binary() {
 	if (match(TokenType::LBR)) {//scope block
 		Vector<Expr*> block{};
 		while (token.type != TokenType::RBR && token.type != TokenType::EOF) {
-			block.push(parse_expr());
-			expect(TokenType::SC, ";");
+			Expr* expr = parse_expr();
+			if (expr->expects_sc()) expect(TokenType::SC);
+			block.push(expr);
 		}
-		expect(TokenType::RBR, "}");
-		return exprs.push(Expr(block));
+		expect(TokenType::RBR);
+		return exprs.push(Expr(token.loc, block));
 	}
 	else if (match(TokenType::LPR)) {//parens
 		Expr* expr = parse_expr();
-		expect(TokenType::RPR, ")");
+		expect(TokenType::RPR);
 		return expr;
 	}
 	else if (token.type == TokenType::INT) {
 		Token t = token; nexttoken();
-		return exprs.push(Expr(t.val));
+		return exprs.push(Expr(token.loc, Value::VAR(t.val)));
 	}
 	else if (token.type == TokenType::ID) {
 		Token t = token; nexttoken();
@@ -216,44 +225,44 @@ Expr* parse_binary() {
 				while (match(TokenType::COMMA))
 					args.push(parse_expr());
 			}
-			expect(TokenType::RPR, ")");
-			return exprs.push(Expr(t.str, args));
+			expect(TokenType::RPR);
+			return exprs.push(Expr(token.loc, t.str, args));
 		}
 		else if (match(TokenType::EQ)) {//assign
-			return exprs.push(Expr(t.str, parse_expr()));
+			return exprs.push(Expr(token.loc, t.str, parse_expr()));
 		}
 		else//var
-			return exprs.push(Expr(t.str));
+			return exprs.push(Expr(token.loc, t.str));
 	}
 	else if (match(TokenType::IF)) {
-		expect(TokenType::LPR, "("); 
+		expect(TokenType::LPR); 
 		Expr* ifexpr = parse_expr(); 
-		expect(TokenType::RPR, ")");
+		expect(TokenType::RPR);
 		Expr* thenexpr = parse_expr();
 		Vector<CondBlock> conds{};
 		conds.push({ ifexpr, thenexpr });
 		while (match(TokenType::ELIF)) {
-			expect(TokenType::LPR, "(");
+			expect(TokenType::LPR);
 			ifexpr = parse_expr();
-			expect(TokenType::RPR, ")");
+			expect(TokenType::RPR);
 			thenexpr = parse_expr();
 			conds.push({ ifexpr, thenexpr });
 		}
 		Expr* elseexp = match(TokenType::ELSE) ? parse_expr() : nullptr;
-		return exprs.push(Expr(conds, elseexp));
+		return exprs.push(Expr(token.loc, conds, elseexp));
 	}
 	else if (match(TokenType::WHILE)) {
-		expect(TokenType::LPR, "(");
+		expect(TokenType::LPR);
 		Expr* cond = parse_expr();
-		expect(TokenType::RPR, ")");
+		expect(TokenType::RPR);
 		Expr* block = parse_expr();
-		return exprs.push(Expr(cond, block));
+		return exprs.push(Expr(token.loc, cond, block));
 	}
 	else if (match(TokenType::FUNC)) {
 		if (token.type != TokenType::ID) error("Expected function name");
 		const char* name = token.str; nexttoken();
 		Vector<const char*> parms{};
-		expect(TokenType::LPR, "(");
+		expect(TokenType::LPR);
 		if (token.type == TokenType::ID) {
 			parms.push(token.str); nexttoken();
 			while (match(TokenType::COMMA)) {
@@ -261,10 +270,13 @@ Expr* parse_binary() {
 				parms.push(token.str); nexttoken();
 			}
 		}
-		expect(TokenType::RPR, ")");
-		return exprs.push(Expr(name, parms, parse_expr()));
+		expect(TokenType::RPR);
+		return exprs.push(Expr(token.loc, name, parms, parse_expr()));
 	}
-	error("Unhandled token type %d", token.type); return nullptr;
+	else if (match(TokenType::RETURN)) {
+		return exprs.push(Expr(token.loc, parse_expr()));
+	}
+	error("Unexpected %s", token_strs[(int)token.type]); return nullptr;
 }
 Expr* parse_unary(TokenType p = TokenType::GT) {
 	if (p == TokenType::INT)
@@ -272,148 +284,159 @@ Expr* parse_unary(TokenType p = TokenType::GT) {
 	TokenType np = (TokenType)((int)p + 1);
 	Expr* expr = parse_unary(np);
 	while (match(p))
-		expr = exprs.push(Expr(p, expr, parse_unary(np)));
+		expr = exprs.push(Expr(token.loc, p, expr, parse_unary(np)));
 	return expr;
 }
 Expr* parse_expr() {
 	return parse_unary();
 }
-
-//interpreter from this point!
-struct Function {
-	Function(int numargs, Value(*FuncCallback)(int argc, Value* args)) : isnative(true), native({ numargs, FuncCallback }) {}
-	Function(Vector<const char*> params, Expr* block) : isnative(false), lambda({ params, block }) {}
-	Function() {}
-	union {
-		struct { int numargs; Value(*FuncCallback)(int argc, Value* args); } native;
-		struct { Vector<const char*> args; Expr* block; } lambda;
-	};
-	bool isnative;
-};
-struct Env {
-	Map<const char*, Function> funcs; Map<const char*, Value> vars;
-};
-Vector<Env> envs;
-Value* getvar(const char* name) {
-	for (int i = envs.len - 1; i >= 0; --i)
-		if (Value* value = envs.items[i].vars.get(name))
-			return value;
-	return nullptr;
-}
-Value setvar(const char* name, Value val) {
-	if (Value* value = getvar(name))
-		*value = val;
-	envs.back().vars.put(name, val);
-	return val;
-}
-Function* getfunc(const char* name) {
-	for (int i = envs.len - 1; i >= 0; --i)
-		if (Function* func = envs.items[i].funcs.get(name))
-			return func;
-	return nullptr;
-}
-void setfunc(const char* name, Function val) {
-	if (getfunc(name)) error("Already defined function %s", name);
-	envs.back().funcs.put(name, val);
-}
-void pushenv() { envs.push({}); }
-void popenv() { envs.back().funcs.clear(); envs.back().vars.clear(); envs.pop(); }
-
-template <typename T> T cast_val(Value v) {
-	if (v.type == ValueType::s32) return (T)v.val;
-	error("Cannot cast void value");
-	return T();
-}
-template <typename T> Value eval_op(TokenType op, Value l, Value r) {
-	T lv = cast_val<T>(l), rv = cast_val<T>(r);
-	if (op == TokenType::ADD) return lv + rv;
-	if (op == TokenType::SUB) return lv - rv;
-	if (op == TokenType::MUL) return lv * rv;
-	if (op == TokenType::DIV) return lv / rv;
-	if (op == TokenType::GT) return lv > rv;
-	if (op == TokenType::LT) return lv < rv;
-	if (op == TokenType::EQEQ) return lv == rv;
-	if (op == TokenType::LTEQ) return lv <= rv;
-	if (op == TokenType::GTEQ) return lv >= rv;
-	if (op == TokenType::NEQ) return lv != rv;
-	error("Illegal op %d for type %d", op, l.type);
-	return Value();
-}
-template<typename T> Value eval_op_int(TokenType op, Value l, Value r) {
-	if (op == TokenType::MOD) return cast_val<T>(l) % cast_val<T>(r);
-	return eval_op<T>(op, l, r);
-}
-
-Value eval_expr(Expr* e) {
-	if (!e) { return 0; }
-	if (e->type == ExprType::VAR) {
-		if (Value* val = getvar(e->varname))
-			return *val;
-		error("Unknown variable %s", e->varname);
+Expr* parse(const char* str) {
+	stream = streambeg = str; nexttoken();
+	Vector<Expr*> block{};
+	while (token.type != TokenType::EOF) {
+		Expr* expr = parse_expr();
+		if (expr->expects_sc()) expect(TokenType::SC);
+		block.push(expr);
 	}
-	else if (e->type == ExprType::VAL) return e->val;
-	else if (e->type == ExprType::BINARY) {
-		Value l = eval_expr(e->binary.l); Value r = eval_expr(e->binary.r);
-		if (l.type == ValueType::s32) return eval_op_int<s32>(e->binary.op, l, r);
-		error("Cannot apply operator to void");
-	}
-	else if (e->type == ExprType::CALL) {
-		Function* func = getfunc(e->call.funcname);
-		if (!func) error("Undefined function %s", e->call.funcname);
-		
-		int numargs = -1;
-		if (func->isnative && func->native.numargs != -1) numargs = func->native.numargs;
-		else if (!func->isnative) numargs = func->lambda.args.len;
-		if (numargs != -1 && numargs != e->call.args.len) error("Expected %d args got %d", numargs, e->call.args.len);
+	return exprs.push(Expr(token.loc, block));
+}
 
-		if (func->isnative) {
-			Value* vals = new Value[e->call.args.len];
-			for (u32 i = 0; i < e->call.args.len; ++i)
-				vals[i] = eval_expr(e->call.args.items[i]);
-			Value val = func->native.FuncCallback(e->call.args.len, vals);
-			delete[] vals;
-			return val;
+//resolve variables
+void resolve_expr(Expr* expr, Scope* scope = nullptr) {
+	if (expr->type != ExprType::BLOCK && scope == nullptr) error(expr, "Unexpected expression");
+	switch (expr->type) {
+	case ExprType::BLOCK:
+		if (scope) {//deep copy parent scope variables
+			for (u32 i = 0; i < scope->vars.cap; ++i)
+				if (scope->vars.keys[i])
+					expr->block.scope.vars.put(scope->vars.keys[i], scope->vars.vals[i]);
+		}
+		for (Expr* e : expr->block.exprs)
+			resolve_expr(e, &expr->block.scope);
+		break;
+	case ExprType::VAL: break;
+	case ExprType::VAR:
+		if (!scope->vars.get(expr->varname))
+			error(expr, "Unknown variable %s", expr->varname);
+		break;
+	case ExprType::ASSIGN:
+		resolve_expr(expr->assign.e, scope);
+		if (Value* val = scope->vars.get(expr->assign.varname)) {
+			if (val->type == ValueType::FUNC)
+				error(expr, "Cannot assign function to variable");
 		}
 		else {
-			pushenv();
-			for (u32 i = 0; i < e->call.args.len; ++i)
-				setvar(func->lambda.args.items[i], eval_expr(e->call.args.items[i]));
-			Value val = eval_expr(func->lambda.block);
-			popenv();
-			return val;
+			scope->vars.put(expr->assign.varname, Value::VAR(scope->vars.len));
+			scope->vars_in_scope++;
+		}
+		break;
+	case ExprType::BINARY:
+		resolve_expr(expr->binary.l, scope); resolve_expr(expr->binary.r, scope);
+		break;
+	case ExprType::CALL:
+		if (Value* val = scope->vars.get(expr->call.funcname)) {
+			if (val->type != ValueType::FUNC) error(expr, "%s is not a function", expr->call.funcname);
+		}
+		else
+			error(expr, "Unknown function %s", expr->call.funcname);
+		for (Expr* e : expr->call.args)
+			resolve_expr(e, scope);
+		break;
+	case ExprType::IF:
+		for (CondBlock& cond : expr->ifexpr.conds) {
+			resolve_expr(cond.cond, scope);
+			resolve_expr(cond.block, scope);
+		}
+		if (expr->ifexpr.elseblock)
+			resolve_expr(expr->ifexpr.elseblock, scope);
+		break;
+	case ExprType::WHILE:
+		resolve_expr(expr->whileexpr.cond, scope);
+		resolve_expr(expr->whileexpr.block, scope);
+		break;
+	case ExprType::FUNC:
+		if (scope->vars.get(expr->func.funcname))
+			error(expr, "%s already defined", expr->func.funcname);
+		scope->vars.put(expr->func.funcname, Value::FUNC());
+		resolve_expr(expr->func.exprs);
+		break;
+	default: __debugbreak(); break;
+	}
+}
+
+//vm!
+enum class Op : u8 { HLT, LIT, GT, LT, EQEQ, LTEQ, GTEQ, NEQ, ADD, SUB, MUL, DIV, MOD, LOAD, STORE, POP, JMP, TEST };
+const char* op_strs[] = { "HLT", "LIT", "GT", "LT", "EQEQ", "LTEQ", "GTEQ", "NEQ", "ADD", "SUB", "MUL", "DIV", "MOD", "LOAD", "STORE", "POP", "JMP", "TEST" };
+const bool op_val[] = { false,true,false,false,false,false,false,false,false,false,false,false,false,true,true,false,true,true };
+static_assert((int)Op::GT == (int)TokenType::GT, "?");
+static_assert((int)Op::MOD == (int)TokenType::MOD, "?");
+Vector<u8> code;
+template <typename T> void code_set(u32 pos, T t) { *(T*)(code.items + pos) = t; }
+template <typename T> void code_push(T t) { u32 p = code.len; code.len += sizeof(T); if (code.len >= code.cap) code.grow(); code_set<T>(p, t); }
+void vm_compile_expr(Expr* expr, Scope* scope) {
+	switch (expr->type) {
+	case ExprType::BLOCK: {
+		for (u32 i = 0; i < expr->block.scope.vars_in_scope; ++i) { code_push(Op::LIT); code_push<u32>(0); }
+		for (Expr* e : expr->block.exprs)
+			vm_compile_expr(e, &expr->block.scope);
+		for (u32 i = 0; i < expr->block.scope.vars_in_scope; ++i) code_push(Op::POP);
+	} break;
+	case ExprType::VAL: code_push(Op::LIT); code_push(expr->val.val); break;
+	case ExprType::VAR: code_push(Op::LOAD); code_push(scope->vars.get(expr->varname)->val); break;
+	case ExprType::ASSIGN: 
+		vm_compile_expr(expr->assign.e, scope);
+		code_push(Op::STORE); code_push(scope->vars.get(expr->assign.varname)->val);
+		break;
+	case ExprType::BINARY: vm_compile_expr(expr->binary.l, scope); vm_compile_expr(expr->binary.r, scope); code_push((Op)expr->binary.op); break;
+	case ExprType::WHILE: {
+		u32 while_start = code.len;
+		vm_compile_expr(expr->whileexpr.cond, scope);
+		code_push(Op::TEST); u32 goto_whileend = code.len; code_push<u32>(0);
+		vm_compile_expr(expr->whileexpr.block, scope);
+		code_push(Op::JMP); code_push(while_start);
+		code_set<u32>(goto_whileend, code.len);
+	} break;
+	default: __debugbreak(); break;
+	}
+}
+u32 stack[512];
+u32 pc = 0, fp = 0, sp = 0;
+template <typename T> T code_pop() { T v = *(T*)(code.items + pc); pc += sizeof(T); return v; }
+void vm_disasm() {
+	pc = 0;
+	while (pc < code.len) {
+		Op op = code_pop<Op>();
+		print("%s ", op_strs[(int)op]);
+		if (op_val[(int)op])
+			print("%d ", code_pop<u32>());
+	}
+	print("\n");
+}
+#define OP(o,op) case Op::o: stack[sp-2] = (stack[sp-2] op stack[sp-1]); --sp; break;
+void vm_exec() {
+	pc = 0; fp = 0; sp = 0;
+	u32 val = 0;
+	while (pc >= 0 && pc < code.len) {
+		Op op = code_pop<Op>();
+		print("%s ", op_strs[(int)op]);
+		if (op_val[(int)op]) {
+			val = code_pop<u32>();
+			print("%d ", val);
+		}
+		switch (op) {
+		case Op::HLT: return;
+		case Op::LIT: stack[sp++] = val; break;
+		case Op::LOAD: stack[sp++] = stack[fp + val]; break;
+		case Op::STORE: stack[fp + val] = stack[--sp]; break;
+		case Op::POP: --sp; break;
+		case Op::JMP: pc = val; break;
+		case Op::TEST: if (stack[--sp] == 0) pc = val; break;
+			OP(GT, >) OP(LT, <) OP(EQEQ, ==) OP(LTEQ, <=) OP(GTEQ, >=) OP(NEQ, !=) OP(ADD, +) OP(SUB, -) OP(MUL, *) OP(DIV, /) OP(MOD, %)
+		default: __debugbreak(); break;
 		}
 	}
-	else if (e->type == ExprType::FUNC) { setfunc(e->func.funcname, Function(e->func.params, e->func.block)); return Value(); }
-	else if (e->type == ExprType::ASSIGN) return setvar(e->assign.varname, eval_expr(e->assign.e));
-	else if (e->type == ExprType::BLOCK) {
-		pushenv();
-		Value lastval;
-		for (Expr* ce : e->block)
-			lastval = eval_expr(ce);
-		popenv();
-		return lastval;
-	}
-	else if (e->type == ExprType::IF) {
-		for (CondBlock& cond : e->ifexpr.conds)
-			if (cast_val<s32>(eval_expr(cond.cond)) != 0)
-				return eval_expr(cond.block);
-		if (e->ifexpr.elseblock)
-			return eval_expr(e->ifexpr.elseblock);
-		return Value();
-	}
-	else if (e->type == ExprType::WHILE) {
-		while (cast_val<s32>(eval_expr(e->whileexpr.cond)) != 0)
-			eval_expr(e->whileexpr.block);
-		return Value();
-	}
-	error("Unknown eval");
-	return Value();
-}
-Value eval(const char* str) {
-	streambeg = stream = str; nexttoken(); 
-	Expr* e = parse_expr();
-	Value val = eval_expr(e);
-	return val;
+	if (sp != 0 || fp != 0) __debugbreak();
+	print("\n");
 }
 
 #define _CRT_SECURE_NO_WARNINGS
@@ -432,16 +455,13 @@ void print(const char* fmt, va_list args) {
 void print(const char* fmt, ...) {
 	va_list args; va_start(args, fmt); print(fmt, args); va_end(args);
 }
-void error(const char* fmt, ...) {
-	va_list args;
-	va_start(args, fmt); 
+void error(const char* loc, const char* fmt, va_list args) {
 	print("Error: ");
-	print(fmt, args); 
-	va_end(args);
+	print(fmt, args);
 	int line = 0, lineoff = 0;
-	if (token.stream) {
+	if (loc) {
 		const char* linestart = streambeg, *lineend = streambeg;
-		for (const char* s = streambeg; s != token.stream; ++s, ++lineoff) {
+		for (const char* s = streambeg; s != loc; ++s, ++lineoff) {
 			if (*s == '\n') { ++line; lineoff = 0; linestart = s + 1; }
 		}
 		for (lineend = linestart; *lineend != '\0' && *lineend != '\n'; ++lineend);
@@ -452,41 +472,51 @@ void error(const char* fmt, ...) {
 	__debugbreak();
 	exit(1);
 }
-
-void test_expr(const char* s, int v) { print("%s\n", s); Value a = eval(s); if (!((v == 0 && a.type == ValueType::VOID) || cast_val<int>(a) == v)) __debugbreak(); }
-void test_vm(const char* s, int v) {
-	print("%s\n", s);
-	streambeg = stream = s; nexttoken();
-	Expr* e = parse_expr();
-	code.clear();
-	vm_compile(e);
-	vm_disasm();
-	int r = vm_exec();
-	if (v != r) __debugbreak();
+void error(const char* fmt, ...) {
+	va_list args; va_start(args, fmt); error(token.loc, fmt, args); va_end(args);
 }
-void test() {	
-	test_expr("{ func fib(n) if (n > 1) n+fib(n-1) else 1; fib(3); }", 6);
-	test_expr("print(b=5,3)", 0);
-	test_expr("3+3>=6", 1);
-	test_expr("{ func x(n) n+1; x(3); }", 4);
-	test_expr("13%10==3", 1);
-	test_expr("{ x = 3; while (x > 0) { x = x - 1; }; }", 0);
-	test_expr("if (3 > 1) 1", 1);
+void error(Expr* expr, const char* fmt, ...) {
+	va_list args; va_start(args, fmt); error(expr->loc, fmt, args); va_end(args);
+}
+
+void test_expr(const char* s, int v) { 
+	print("%s\n", s);
+	Expr* expr = parse(s);
+	resolve_expr(expr);
+	code.clear();
+	vm_compile_expr(expr, nullptr);
+	vm_disasm();
+	vm_exec();
+	if (stack[0] != v) __debugbreak();
+	assert(stack[0] == v);
+}
+void test() {
+	//test_expr("func x(n) { return n + 1; } v = x(5);", 6);
+	//test_expr("v = 3; v = while(v > 1) { v = v - 1; };", 1);
+	test_expr("v = 0; x = 3; while (x > 0) { x = x - 1; v = v + 1; }", 3);
+	test_expr("v=3+3>=6;", 1);
+	test_expr("v=245645432;", 245645432);
+	test_expr("v=3;", 3);
+	test_expr("v=13%10==3;", 1);
+	test_expr("v=1+2+3; { x = 2+v; x=x+1; v=x; } v = v*2;", 18);
+	test_expr("v=(3*4)+5;", 17);
+	test_expr("v=(3+(5-2) \t\n );", 6);
+	test_expr("v=(3);", 3);
+	test_expr("v=  5 +   3; \t", 8);
+	test_expr("v=5*3;", 15);
+	test_expr("v=15/3*4;", 20);
+	test_expr("v=4+3*3;", 13);
+	test_expr("v=3+2+1;", 6);
+	test_expr("v=10;", 10);
+	/*test_expr("if (3 > 1) 1", 1);
 	test_expr("if (3 > 4) 1 else 2", 2);
 	test_expr("if (3 > 4) 1 elif (5 > 1) 2 else 3", 2);
 	test_expr("{ x = 3; print(x); }", 0);
 	test_expr("{ x = 3; }", 3);
 	test_expr("{ x = 3; x; }", 3);
-	test_expr("(3*4)+5", 17);
-	test_expr("(3+(5-2) \t\n )", 6);
-	test_expr("(3)", 3);
-	test_expr("  5 +   3 \t", 8);
-	test_expr("5*3", 15);
-	test_expr("15/3*4", 20);
-	test_expr("4+3*3", 13);
-	test_expr("3+2+1", 6);
-	test_expr("10", 10);
-	test_expr("245645432", 245645432);
+	
+	test_expr("func x(n) n+1; x(3);");
+	test_expr("func fib(n) if (n > 1) n+fib(n-1) else 1; fib(3);");*/
 	assert(internstr("a") == internstr("a"));
 	assert(internstr("a") != internstr("b"));
 	assert(internstr("a") != "a");
@@ -495,14 +525,6 @@ void test() {
 	streambeg = stream = "foo"; nexttoken();
 }
 int main(int argc, char** argv) {
-	pushenv(); 
-	setfunc(internstr("print"), Function(-1, [](int argc, Value* args) {
-		for (int i = 0; i < argc; ++i)
-			print("%d ", cast_val<s32>(args[i]));
-		print("\n");
-		return Value();
-	}));
 	test();
-	
 	return 0;
 }
