@@ -228,7 +228,17 @@ Expr* parse_expr() {
 }
 enum class StmtType { EXPR, FUNC, ASSIGN, BLOCK, IF, WHILE, RETURN };
 struct CondBlock { Expr* cond; Stmt* block; };
-struct Scope { Map<const char*, Value> vars; u32 vars_in_scope; Scope* parent; bool returns; };
+struct Scope { 
+	Map<const char*, Value> vars; u32 vars_in_scope; Scope* parent; bool returns; 
+	Value* get(const char* name) {
+		if (Value* val = vars.get(name))
+			return val;
+		else if (parent)
+			return parent->get(name);
+		else
+			return nullptr;
+	}
+};
 struct Stmt {
 	StmtType type;
 	const char* loc;
@@ -316,12 +326,12 @@ void resolve_expr(Expr* expr, Scope* scope) {
 	switch (expr->type) {
 	case ExprType::VAL: break;
 	case ExprType::VAR:
-		if (!scope->vars.get(expr->varname))
+		if (!scope->get(expr->varname))
 			error(expr, "Unknown variable %s", expr->varname);
 		break;
 	case ExprType::ASSIGN:
 		resolve_expr(expr->assign.e, scope);
-		if (Value* val = scope->vars.get(expr->assign.varname)) {
+		if (Value* val = scope->get(expr->assign.varname)) {
 			if (val->type == ValueType::FUNC)
 				error(expr, "Cannot assign function to variable");
 		}
@@ -334,7 +344,7 @@ void resolve_expr(Expr* expr, Scope* scope) {
 		resolve_expr(expr->binary.l, scope); resolve_expr(expr->binary.r, scope);
 		break;
 	case ExprType::CALL:
-		if (Value* val = scope->vars.get(expr->call.funcname)) {
+		if (Value* val = scope->get(expr->call.funcname)) {
 			if (val->type != ValueType::FUNC) error(expr, "%s is not a function", expr->call.funcname);
 		}
 		else
@@ -345,16 +355,10 @@ void resolve_expr(Expr* expr, Scope* scope) {
 	default: __debugbreak(); break;
 	}
 }
-void copy_scope(Scope& src, Scope& tgt) {
-	tgt.parent = &src;
-	for (u32 i = 0; i < src.vars.cap; ++i)
-		if (src.vars.keys[i])
-			tgt.vars.put(src.vars.keys[i], src.vars.vals[i]);
-}
 void resolve_stmt(Stmt* stmt, Scope* scope) {
 	switch (stmt->type) {
 	case StmtType::BLOCK:
-		if (scope) copy_scope(*scope, stmt->block.scope);
+		if (scope) stmt->block.scope.parent = scope;
 		for (Stmt* s : stmt->block.stmts)
 			resolve_stmt(s, &stmt->block.scope);
 		break;
@@ -371,11 +375,12 @@ void resolve_stmt(Stmt* stmt, Scope* scope) {
 		resolve_stmt(stmt->whileexpr.block, scope);
 		break;
 	case StmtType::FUNC:
-		if (scope->vars.get(stmt->func.funcname))
+		if (scope->get(stmt->func.funcname))
 			error(stmt, "%s already defined", stmt->func.funcname);
-		scope->vars.put(stmt->func.funcname, Value::FUNC());
 		for (const char* arg : stmt->func.params)
 			stmt->func.scope.vars.put(arg, Value::VAR(stmt->func.scope.vars.len - stmt->func.params.len - 2));
+		scope->vars.put(stmt->func.funcname, Value::FUNC());
+		stmt->func.scope.vars.put(stmt->func.funcname, Value::FUNC());
 		resolve_stmt(stmt->func.block, &stmt->func.scope);
 		break;
 	case StmtType::EXPR: resolve_expr(stmt->expr, scope); break;
@@ -401,15 +406,15 @@ template <typename T> void code_push(T t) { u32 p = code.len; code.len += sizeof
 void vm_compile_expr(Expr* expr, Scope* scope) {
 	switch (expr->type) {
 	case ExprType::VAL: code_push(Op::LIT); code_push(expr->val.val); break;
-	case ExprType::VAR: code_push(Op::LOAD); code_push(scope->vars.get(expr->varname)->val); break;
+	case ExprType::VAR: code_push(Op::LOAD); code_push(scope->get(expr->varname)->val); break;
 	case ExprType::ASSIGN: 
 		vm_compile_expr(expr->assign.e, scope);
-		code_push(Op::STORE); code_push(scope->vars.get(expr->assign.varname)->val);
+		code_push(Op::STORE); code_push(scope->get(expr->assign.varname)->val);
 		break;
 	case ExprType::BINARY: vm_compile_expr(expr->binary.l, scope); vm_compile_expr(expr->binary.r, scope); code_push((Op)expr->binary.op); break;
 	case ExprType::CALL:
 		for (Expr* arg : expr->call.args) vm_compile_expr(arg, scope);
-		code_push(Op::CALL); code_push(scope->vars.get(expr->call.funcname)->val);
+		code_push(Op::CALL); code_push(scope->get(expr->call.funcname)->val);
 		break;
 	default: __debugbreak(); break;
 	}
@@ -433,7 +438,8 @@ void vm_compile_stmt(Stmt* stmt, Scope* scope) {
 	case StmtType::EXPR: vm_compile_expr(stmt->expr, scope); code_push(Op::POP); break;
 	case StmtType::FUNC: {
 		code_push(Op::JMP); u32 goto_funcend = code.len; code_push<u32>(0);
-		scope->vars.get(stmt->func.funcname)->val = code.len;
+		scope->get(stmt->func.funcname)->val = code.len;
+		stmt->func.scope.get(stmt->func.funcname)->val = code.len;
 		vm_compile_stmt(stmt->func.block, &stmt->func.scope);
 		code_push(Op::RET);
 		code_set<u32>(goto_funcend, code.len);
@@ -443,6 +449,23 @@ void vm_compile_stmt(Stmt* stmt, Scope* scope) {
 		code_push(Op::STORE); code_push<int>(-3);
 		code_push(Op::RET);
 		break;
+	case StmtType::IF: {
+		u32 goto_elif = 0;
+		Vector<u32> goto_end{};
+		for (CondBlock& cond : stmt->ifexpr.conds) {
+			if (goto_elif != 0)
+				code_set<u32>(goto_elif, code.len);
+			vm_compile_expr(cond.cond, scope);
+			code_push(Op::TEST); goto_elif = code.len; code_push<u32>(0);
+			vm_compile_stmt(cond.block, scope);
+			code_push(Op::JMP); goto_end.push(code.len); code_push<u32>(0);
+		}
+		code_set<u32>(goto_elif, code.len);
+		if (stmt->ifexpr.elseblock)
+			vm_compile_stmt(stmt->ifexpr.elseblock, scope);
+		for (u32 label : goto_end)
+			code_set<u32>(label, code.len);
+	} break;
 	default: __debugbreak(); break;
 	}
 }
@@ -546,6 +569,11 @@ void test_expr(const char* s, int v) {
 	assert(stack[0] == v);
 }
 void test() {
+	test_expr("v = 0; func fib(n) { if (n <= 1) return 1; else return n + fib(n-1); } v = fib(3);", 6);
+	test_expr("v = 1; if (v > 0) { v = 2; }", 2);
+	test_expr("v = 1; if (v == 0) { v = 2; } else if (v == 1) { v = 3; }", 3);
+	test_expr("v = 1; if (v < 0) { v = 2; } else if (v != 1) { v = 3; } else { v = 4; }", 4);
+	test_expr("v = 1; if (v < 0) { v = 2; } else if (v == 1) { v = 12345; } else { v = 4; }", 12345);
 	test_expr("v = 0; func x(n) { return n + 1; } v = x(5);", 6);
 	test_expr("v = 0; x = 3; while (x > 0) { x = x - 1; v = v + 1; }", 3);
 	test_expr("v=3+3>=6;", 1);
