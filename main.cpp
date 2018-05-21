@@ -114,8 +114,8 @@ const char* internstr(const char* beg, const char* end) {
 const char* internstr(const char* str) { return internstr(str, str + strlen(str)); }
 
 //tokeniser
-enum class TokenType { LPR, RPR, GT, LT, EQEQ, LTEQ, GTEQ, NEQ, ADD, SUB, MUL, DIV, MOD, INT, ID, EQ, EOF, COMMA, LBR, RBR, SC, IF, ELIF, ELSE, WHILE, FUNC, RETURN };
-const char* token_strs[] = { "(", ")", ">", "<", "==", "<=", ">=", "!=", "+", "-", "*", "/", "%", "int", "id", "=", "<eof>", ",", "{", "}", ";", "if", "elif", "else", "while", "func", "return" };
+enum class TokenType { LPR, RPR, GT, LT, EQEQ, LTEQ, GTEQ, NEQ, ADD, SUB, MUL, DIV, MOD, INT, ID, EQ, EOF, COMMA, LBR, RBR, SC, IF, ELIF, ELSE, WHILE, FUNC, RETURN, FOR };
+const char* token_strs[] = { "(", ")", ">", "<", "==", "<=", ">=", "!=", "+", "-", "*", "/", "%", "int", "id", "=", "<eof>", ",", "{", "}", ";", "if", "elif", "else", "while", "func", "return", "for" };
 struct Token { TokenType type; int val; const char* str; const char* loc; } token;
 const char *streambeg, *stream;
 #define TOK(cv,t) if (c == cv) { ++stream; token.type = TokenType::t; return; }
@@ -137,7 +137,7 @@ void nexttoken() {
 		const char* start = stream; ++stream; c = *stream;
 		while ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_') { ++stream; c = *stream; }
 		token.str = internstr(start, stream); 
-		KEYW("if", IF) KEYW("elif", ELIF) KEYW("else", ELSE) KEYW("while", WHILE) KEYW("func", FUNC) KEYW("return", RETURN)
+		KEYW("if", IF) KEYW("elif", ELIF) KEYW("else", ELSE) KEYW("while", WHILE) KEYW("func", FUNC) KEYW("return", RETURN) KEYW("for", FOR)
 		token.type = TokenType::ID; return;
 	}
 	TOK2("==", EQEQ) TOK2("<=", LTEQ) TOK2(">=", GTEQ) TOK2("!=", NEQ)
@@ -308,6 +308,23 @@ Stmt* parse_stmt() {
 		Expr* expr = parse_expr(); expect(TokenType::SC);
 		return stmts.push(Stmt(token.loc, true, expr));
 	}
+	else if (match(TokenType::FOR)) {
+		expect(TokenType::LPR);
+		Vector<Stmt*> block{};
+		if (token.type != TokenType::SC) {
+			Expr* init = parse_expr(); block.push(stmts.push(Stmt(token.loc, false, init)));
+			if (init->type != ExprType::ASSIGN) error(init, "Must initialise a variable");
+		}
+		expect(TokenType::SC);
+		Expr* whilecond = parse_expr(); expect(TokenType::SC);
+		Vector<Stmt*> forblock{};
+		Expr* increment = parse_expr();
+		if (increment->type != ExprType::ASSIGN) error(increment, "Must modify a variable");
+		expect(TokenType::RPR);
+		Stmt* body = parse_stmt(); forblock.push(body); forblock.push(stmts.push(Stmt(token.loc, false, increment)));
+		block.push(stmts.push(Stmt(token.loc, whilecond, stmts.push(Stmt(token.loc, forblock)))));
+		return stmts.push(Stmt(token.loc, block));
+	}
 	else {
 		Expr* expr = parse_expr(); expect(TokenType::SC);
 		return stmts.push(Stmt(token.loc, false, expr));
@@ -336,7 +353,10 @@ void resolve_expr(Expr* expr, Scope* scope) {
 				error(expr, "Cannot assign function to variable");
 		}
 		else {
-			scope->vars.put(expr->assign.varname, Value::VAR(scope->vars.len));
+			u32 count = 0;
+			for (Scope* s = scope; s; s = s->parent)
+				count += s->vars.len;
+			scope->vars.put(expr->assign.varname, Value::VAR(count));
 			scope->vars_in_scope++;
 		}
 		break;
@@ -569,6 +589,8 @@ void test_expr(const char* s, int v) {
 	assert(stack[0] == v);
 }
 void test() {
+	test_expr("v = 3; { x = 2; }", 3);
+	test_expr("v = 0; for (i = 0; i<3; i=i+1) { v = v + 1; }", 3);
 	test_expr("v = 0; func fib(n) { if (n <= 1) return 1; else return n + fib(n-1); } v = fib(3);", 6);
 	test_expr("v = 1; if (v > 0) { v = 2; }", 2);
 	test_expr("v = 1; if (v == 0) { v = 2; } else if (v == 1) { v = 3; }", 3);
@@ -590,15 +612,6 @@ void test() {
 	test_expr("v=4+3*3;", 13);
 	test_expr("v=3+2+1;", 6);
 	test_expr("v=10;", 10);
-	/*test_expr("if (3 > 1) 1", 1);
-	test_expr("if (3 > 4) 1 else 2", 2);
-	test_expr("if (3 > 4) 1 elif (5 > 1) 2 else 3", 2);
-	test_expr("{ x = 3; print(x); }", 0);
-	test_expr("{ x = 3; }", 3);
-	test_expr("{ x = 3; x; }", 3);
-	
-	test_expr("func x(n) n+1; x(3);");
-	test_expr("func fib(n) if (n > 1) n+fib(n-1) else 1; fib(3);");*/
 	assert(internstr("a") == internstr("a"));
 	assert(internstr("a") != internstr("b"));
 	assert(internstr("a") != "a");
