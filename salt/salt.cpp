@@ -107,7 +107,7 @@ const char* internstr(const char* beg, const char* end) {
 const char* internstr(const char* str) { return internstr(str, str + strlen(str)); }
 
 //tokeniser
-enum class TokenType { LPR, RPR, EQ, GT, LT, EQEQ, LTEQ, GTEQ, NEQ, ADD, SUB, MUL, DIV, MOD, DOT, LSB, INT_VAL, ID, EOF, COMMA, LBR, RBR, SC, IF, ELIF, ELSE, WHILE, FUNC, RETURN, FOR, COLON, VAR, TRUE, FALSE, RSB, INT, BOOL, STRUCT, CHAR, STR, AND, NULLPTR };
+enum class TokenType { LPR, RPR, EQ, GT, LT, GTEQ, LTEQ, GTEQ, NEQ, ADD, SUB, MUL, DIV, MOD, DOT, LSB, INT_VAL, ID, EOF, COMMA, LBR, RBR, SC, IF, ELIF, ELSE, WHILE, FUNC, RETURN, FOR, COLON, VAR, TRUE, FALSE, RSB, INT, BOOL, STRUCT, CHAR, STR, AND, NULLPTR };
 const char* token_strs[] = { "(", ")", "=", ">", "<", "==", "<=", ">=", "!=", "+", "-", "*", "/", "%", ".", "[", "int_val", "id", "<eof>", ",", "{", "}", ";", "if", "elif", "else", "while", "func", "return", "for", ":", "var", "true", "false", "]", "int", "bool", "struct", "char", "\"", "&", "nullptr" };
 struct Token { TokenType type; int val; const char* str; const char* loc; } token;
 const char *streambeg, *stream;
@@ -163,7 +163,7 @@ bool match(TokenType type) {
 
 //parser
 enum class TypeKind { NONE, VOID, FUNC, INT, CHAR, BOOL, STRUCT, INT_ARR, CHAR_ARR, BOOL_ARR, STRUCT_ARR, INT_PTR, CHAR_PTR, BOOL_PTR, STRUCT_PTR, NULL_PTR };
-const char* type_strs[] = { "void", "func", "int", "char", "bool", "struct", "int[]", "char[]", "bool[]", "struct[]", "int*", "char*", "bool*", "struct*", "nullptr" };
+const char* type_strs[] = { "none","void", "func", "int", "char", "bool", "struct", "int[]", "char[]", "bool[]", "struct[]", "int*", "char*", "bool*", "struct*", "nullptr" };
 struct Type {
     TypeKind kind; int size; Type* base; const char* struct_name;
     bool operator ==(const TypeKind& o) const { return kind == o; }
@@ -302,12 +302,6 @@ Expr* parse_binary(Scope* scope) {
         Type* type = parse_type(scope);
         return exprs.push(Expr(loc, type, parse_expr(scope)));
     }
-    else if (match(TokenType::AND)) {
-        return exprs.push(Expr(loc, ExprType::PTR_ADDR_OF, parse_binary(scope)));
-    }
-    else if (match(TokenType::MUL)) {
-        return exprs.push(Expr(loc, ExprType::PTR_DEREF, parse_binary(scope)));
-    }
     else if (match(TokenType::LBR)) {//array
         Vector<Expr*> vals{};
         vals.push(parse_expr(scope));
@@ -335,6 +329,12 @@ Expr* parse_unary(Scope* scope, TokenType p = TokenType::EQ) {
 		return parse_binary(scope);
 	TokenType np = (TokenType)((int)p + 1);
     const char* loc = token.loc;
+    if (p == TokenType::DOT) {
+        if (match(TokenType::AND))
+            return exprs.push(Expr(loc, ExprType::PTR_ADDR_OF, parse_unary(scope, np)));
+        else if (match(TokenType::MUL))
+            return exprs.push(Expr(loc, ExprType::PTR_DEREF, parse_binary(scope)));
+    }
 	Expr* expr = parse_unary(scope, np);
     while (match(p)) {
         expr = exprs.push(Expr(loc, p, expr, parse_unary(scope, np)));
@@ -708,12 +708,98 @@ Scope* parse(const char* str) {
     }
     return scope;
 }
-
+// c code generator!
 #define _CRT_SECURE_NO_WARNINGS
-#include <stdio.h>
+#include <cstdio>
+#include <stdlib.h>
+#include <string.h>
+void gen_expr(FILE* file, Expr* expr, Scope* scope) {
+    switch (expr->type) {
+    case ExprType::VAL:
+        switch (expr->val.type) {
+        case TypeKind::INT:
+            fprintf(file, "%d", expr->val.int_val);
+            break;
+        case TypeKind::BOOL:
+            fprintf(file, "%s", expr->val.bool_val ? "true" : "false");
+            break;
+        case TypeKind::CHAR:
+            fprintf(file, "'%c'", expr->val.char_val);
+            break;
+        default:
+            error("Unhandled type"); break;
+        }
+        break;
+    case ExprType::VAR:
+        fprintf(file, "%s", expr->varname);
+        break;
+    case ExprType::BINARY:
+        fprintf(file, "(");
+        gen_expr(file, expr->binary.l, scope);
+        fprintf(file, " %s ", token_strs[(int)expr->binary.op]);
+        gen_expr(file, expr->binary.r, scope);
+        fprintf(file, ")");
+        break;
+    default:
+        error("Unhandled type");
+        break;
+    }
+}
+void gen_stmt(FILE* file, Stmt* stmt, Scope* scope) {
+    switch (stmt->type) {
+    case StmtType::BLOCK:
+        fprintf(file, "{\n");
+        for (Stmt* b : stmt->block.stmts)
+            gen_stmt(file, b, stmt->block.scope);
+        fprintf(file, "}\n");
+        break;
+    case StmtType::EXPR:
+        gen_expr(file, stmt->expr, scope); fprintf(file, ";\n");
+        break;
+    case StmtType::RETURN:
+        fprintf(file, "return "); gen_expr(file, stmt->expr, scope); fprintf(file, ";\n");
+        break;
+    default:
+        error("Unhandled stmt type");
+        break;
+    }
+}
+void gen(Scope* scope, const char* fname) {
+    FILE* file = fopen(fname, "wt");
+    if (!file) error("Failed to open %s: %s\n", fname, strerror(errno));
+    for (ScopeVar& var : scope->vars) {
+        switch (var.type->kind) {
+        case TypeKind::FUNC: {
+            fprintf(file, "%s %s(", var.func.ret_type->to_str(), var.name);
+            bool is_first = true;
+            for (ParamDef parm : var.func.params) {
+                if (is_first) is_first = false; else fprintf(file, ", ");
+                fprintf(file, "%s %s", parm.type->to_str(), parm.name);
+            }
+            fprintf(file, ") {\n");
+            for (Stmt* stmt : var.func.block)
+                gen_stmt(file, stmt, var.func.scope);
+            fprintf(file, "}\n");
+        }
+            break;
+        case TypeKind::STRUCT:
+            error("Not handled yet");
+            break;
+        default:
+            fprintf(file, "%s %s", var.type->to_str(), var.name);
+            if (var.var.init) {
+                fprintf(file, " = ");
+                gen_expr(file, var.var.init, scope);
+            }
+            fprintf(file, ";\n");
+            break;
+        }
+    }
+    fclose(file);
+}
+
 #include <stdarg.h>
 #include <cassert>
-#include <stdlib.h>
 #include <cstring>
 
 extern "C" { __declspec(dllimport) void __stdcall OutputDebugStringA(const char* str); }
@@ -754,6 +840,7 @@ void error(Stmt* stmt, const char* fmt, ...) {
 void test_expr(const char* s, int v) { 
 	print("%s\n", s);
     Scope* scope = parse(s);
+    //gen(scope, "test.c");
 }
 void test() {
     assert(make_type(Type(TypeKind::INT_ARR, 3)) == make_type(Type(TypeKind::INT_ARR, 3)));
@@ -774,7 +861,7 @@ void test() {
     test_expr("var a:int = 3; var b:int* = &a; var c:int* = nullptr; var d:int = *b; func main() { c = &a; *c = 4 + *b; b[1] = 5; }", 0);
     test_expr("struct Foo(val:int); var a:Foo = Foo(0); var b:int = a.val; func main() { a.val = 5; }", 0);
     test_expr("struct Foo(a:int,b:int); struct Bar(c:Foo); var d:int = Bar(Foo(1,2)).c.a; var e:Foo[] = { Foo(1, 2), Foo(3, 4) }; var f:Foo = e[0]; var g:int = e[0].a;", 0);
-    //test_expr("struct Foo(val:int); var a:Foo = Foo(1); var b:Foo[] = { Foo(1) }; var c:Foo = b[0]; var d:Foo* = &b[0];", 0);
+    test_expr("struct Foo(val:int); var a:Foo = Foo(1); var b:Foo[] = { Foo(1) }; var c:Foo = b[0]; var d:Foo* = &b[0];", 0);
 
 	assert(internstr("a") == internstr("a"));
 	assert(internstr("a") != internstr("b"));
@@ -785,6 +872,7 @@ void test() {
 }
 
 int main(int argc, char** argv) {
+
     test();
 	return 0;
 }

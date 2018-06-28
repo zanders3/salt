@@ -1,0 +1,37 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio 15
+VisualStudioVersion = 15.0.27428.2037
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "salt", "salt\salt.vcxproj", "{6AF5EACE-3EDF-40F7-856E-B0D067C1CB49}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "tato", "tato\tato.vcxproj", "{84B3FBF1-3559-42A8-97E4-80E8AB4093BE}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|x64 = Debug|x64
+		Debug|x86 = Debug|x86
+		Release|x64 = Release|x64
+		Release|x86 = Release|x86
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{6AF5EACE-3EDF-40F7-856E-B0D067C1CB49}.Debug|x64.ActiveCfg = Debug|x64
+		{6AF5EACE-3EDF-40F7-856E-B0D067C1CB49}.Debug|x64.Build.0 = Debug|x64
+		{6AF5EACE-3EDF-40F7-856E-B0D067C1CB49}.Debug|x86.ActiveCfg = Debug|x64
+		{6AF5EACE-3EDF-40F7-856E-B0D067C1CB49}.Release|x64.ActiveCfg = Release|x64
+		{6AF5EACE-3EDF-40F7-856E-B0D067C1CB49}.Release|x64.Build.0 = Release|x64
+		{6AF5EACE-3EDF-40F7-856E-B0D067C1CB49}.Release|x86.ActiveCfg = Release|x64
+		{84B3FBF1-3559-42A8-97E4-80E8AB4093BE}.Debug|x64.ActiveCfg = Debug|x64
+		{84B3FBF1-3559-42A8-97E4-80E8AB4093BE}.Debug|x64.Build.0 = Debug|x64
+		{84B3FBF1-3559-42A8-97E4-80E8AB4093BE}.Debug|x86.ActiveCfg = Debug|x64
+		{84B3FBF1-3559-42A8-97E4-80E8AB4093BE}.Release|x64.ActiveCfg = Release|x64
+		{84B3FBF1-3559-42A8-97E4-80E8AB4093BE}.Release|x64.Build.0 = Release|x64
+		{84B3FBF1-3559-42A8-97E4-80E8AB4093BE}.Release|x86.ActiveCfg = Release|x64
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {40A77275-E799-437A-AC0A-2C4A067F05B0}
+	EndGlobalSection
+EndGlobal

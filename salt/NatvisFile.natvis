@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?> 
+<AutoVisualizer xmlns="http://schemas.microsoft.com/vstudio/debugger/natvis/2010">
+  <Type Name="Vector&lt;*&gt;">
+    <Expand>
+      <Item Name="len">len</Item>
+      <Item Name="cap">cap</Item>
+      <ArrayItems>
+        <Size>len</Size>
+        <ValuePointer>items</ValuePointer>
+      </ArrayItems>
+    </Expand>
+  </Type>
+  <Type Name="Map&lt;*&gt;">
+    <Expand>
+      <Item Name="len">len</Item>
+      <Item Name="cap">cap</Item>
+      <CustomListItems>
+        <Variable Name="i" InitialValue="0"/>
+        <Size>len</Size>
+        <Loop>
+          <If Condition="keys[i] != 0">
+            <Item Name="{keys[i]}">vals[i]</Item>
+          </If>
+          <Exec>i++</Exec>
+        </Loop>
+      </CustomListItems>
+    </Expand>
+  </Type>
+  <Type Name="Expr">
+    <Expand>
+      <Item Name="type">type</Item>
+      <Item Name="varname" Condition="type == ExprType::VAR">varname</Item>
+      <Item Name="val" Condition="type == ExprType::VAR">val</Item>
+      <Item Name="op" Condition="type == ExprType::BINARY">binary.op</Item>
+      <Item Name="l" Condition="type == ExprType::BINARY">binary.l</Item>
+      <Item Name="r" Condition="type == ExprType::BINARY">binary.r</Item>
+      <Item Name="funcname" Condition="type == ExprType::FUNC">func.funcname</Item>
+      <Item Name="args" Condition="type == ExprType::FUNC">func.args</Item>
+      <Item Name="varname" Condition="type == ExprType::ASSIGN">assign.varname</Item>
+      <Item Name="e" Condition="type == ExprType::ASSIGN">assign.e</Item>
+      <Item Name="block" Condition="type == ExprType::BLOCK">block</Item>
+      <Item Name="ifexp" Condition="type == ExprType::IF">ifexp.ifexp</Item>
+      <Item Name="elseifs" Condition="type == ExprType::IF">ifexp.elseifs</Item>
+      <Item Name="elseexp" Condition="type == ExprType::IF">ifexp.elseexp</Item>
+    </Expand>
+  </Type>
+</AutoVisualizer>
